@@ -206,14 +206,14 @@ def build_pipeline(categorical_features: List[str], numerical_features:List[str]
                 ),
                 categorical_features,
             ),
-            ("num", "passthrough", numerical_features),
+            ("num", StandardScaler(), numerical_features),
         ]
     )
 
     pipeline = Pipeline(
         steps=[
             ("preprocesamiento", transformador),
-            ("escalado", MinMaxScaler()),          # escala toda la matriz a [0, 1]
+            # ("escalado", MinMaxScaler()),          # escala toda la matriz a [0, 1]
             ("pca", PCA()),                        # todas las componentes por defecto
             ("select", SelectKBest(score_func=f_classif)),
             ("mlp", MLPClassifier(max_iter=15000, random_state=17)),
@@ -229,24 +229,25 @@ def tune_pipeline(
     cv_splits: int = 10,
     scoring: str = 'balanced_accuracy',
     n_jobs: int = -1,
-) -> GridSearchCV:
-    """
-    Optimiza los hiperparámetros usando GridSearchCV.
-    - cv: validación cruzada de 10 folds
-    - scoring: balanced accuracy (como pide el enunciado)
-    """
+	) -> GridSearchCV:
+	"""
+	Optimiza los hiperparámetros usando GridSearchCV.
+	- cv: validación cruzada de 10 folds
+	- scoring: balanced accuracy (como pide el enunciado)
+	"""
+	import numpy as np
+	np.random.bit_generator = np.random.MT19937
+	gs = GridSearchCV(
+		estimator=pipeline,
+		param_grid=param_grid,
+		cv=cv_splits,
+		scoring=scoring,
+		n_jobs=n_jobs,
+		verbose=2
+	)
 
-    gs = GridSearchCV(
-        estimator=pipeline,
-        param_grid=param_grid,
-        cv=cv_splits,
-        scoring=scoring,
-        n_jobs=n_jobs,
-        verbose=2
-    )
-
-    gs.fit(X_train, y_train)
-    return gs
+	gs.fit(X_train, y_train)
+	return gs
 
 def save_model(model: Any, path: str) -> None:
 	"""Guarda un objeto Python serializado comprimido con gzip."""
@@ -301,61 +302,63 @@ def main(
 	categorical_features: Optional[List[str]] = None,
 	param_grid: Optional[Dict[str, List[Any]]] = None,
 	random_state: int = 0,
-):
-    # Cargar
-    train_df = load_dataframe(train_path)
-    test_df = load_dataframe(test_path)
+	):
+	# Cargar
+	train_df = load_dataframe(train_path)
+	test_df = load_dataframe(test_path)
 
-    # Limpiar
-    train_df = clean_dataframe(train_df)
-    test_df = clean_dataframe(test_df)
+	# Limpiar
+	train_df = clean_dataframe(train_df)
+	test_df = clean_dataframe(test_df)
 
-    # Obtener conjuntos
-    X_train, y_train, X_test, y_test = split_train_test(train_df=train_df, test_df=test_df)
+	# Obtener conjuntos
+	X_train, y_train, X_test, y_test = split_train_test(train_df=train_df, test_df=test_df)
 
-    # Si no se indican features categóricas intentamos deducir algunas
-    categorical_features = ["SEX", "EDUCATION", "MARRIAGE"]
-    numerical_features = [
-        "LIMIT_BAL", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
-        "BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6",
-        "PAY_AMT1", "PAY_AMT2", "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6",
-    ]
+	# Si no se indican features categóricas intentamos deducir algunas
+	categorical_features = ["SEX", "EDUCATION", "MARRIAGE"]
+	numerical_features = [
+		"LIMIT_BAL", "AGE", "PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6",
+		"BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6",
+		"PAY_AMT1", "PAY_AMT2", "PAY_AMT3", "PAY_AMT4", "PAY_AMT5", "PAY_AMT6",
+	]
 
 
-    pipeline = build_pipeline(categorical_features=categorical_features,
-                            numerical_features = numerical_features)
+	pipeline = build_pipeline(categorical_features=categorical_features,
+							numerical_features = numerical_features)
 
-    param_grid = {
-        "pca__n_components": [None],
+	param_grid = {
+		"pca__n_components": [None],
 		"select__k": [20],
-        "mlp__hidden_layer_sizes": [ (50,30,40,60)],
-        "mlp__alpha": [0.26],
+		"mlp__hidden_layer_sizes": [ (50,30,40,60), (10,7,5,3,1)],
+		"mlp__alpha": [0.2, 0.25],
 		"mlp__learning_rate_init": [0.001],
-        "mlp__solver": ["adam"],
-        # "mlp__early_stopping":[True]
-    }
+		"mlp__solver": ["adam"],
+		# "mlp__early_stopping":[True]
+	}
 
 
-    # Ajustar con búsqueda de hiperparámetros
-    gs = tune_pipeline(pipeline, X_train, y_train, param_grid=param_grid, cv_splits=10, scoring='balanced_accuracy')
+	# Ajustar con búsqueda de hiperparámetros
+	gs = tune_pipeline(pipeline, X_train, y_train, param_grid=param_grid, cv_splits=10, scoring='balanced_accuracy')
 
-    # Guardar el mejor modelo
-    best_model = gs.best_estimator_
-    save_model(best_model, 'files/models/best_model.pkl.gz')
-    save_model(gs, model_out)
+	# Guardar el mejor modelo
+	best_model = gs.best_estimator_
+	save_model(best_model, 'files/models/best_model.pkl.gz')
+	save_model(gs, model_out)
+	import cloudpickle
+	with gzip.open('files/models/model.pkl.gz', 'wb') as f:
+		cloudpickle.dump(gs, f)
+		print("Best parameters:", gs.best_params_)
 
-    print("Best parameters:", gs.best_params_)
 
-
-    # Evaluar en train y test
-    metrics_list = []
-    train_metrics, train_cm = evaluate_model(best_model, X_train, y_train, 'train')
-    test_metrics, test_cm = evaluate_model(best_model, X_test, y_test, 'test')
-    metrics_list.append(train_metrics)
-    metrics_list.append(test_metrics)
-    metrics_list.append(train_cm)
-    metrics_list.append(test_cm)
-    save_metrics(metrics_list, metrics_out)
+	# Evaluar en train y test
+	metrics_list = []
+	train_metrics, train_cm = evaluate_model(best_model, X_train, y_train, 'train')
+	test_metrics, test_cm = evaluate_model(best_model, X_test, y_test, 'test')
+	metrics_list.append(train_metrics)
+	metrics_list.append(test_metrics)
+	metrics_list.append(train_cm)
+	metrics_list.append(test_cm)
+	save_metrics(metrics_list, metrics_out)
 
 
 if __name__ == '__main__':
